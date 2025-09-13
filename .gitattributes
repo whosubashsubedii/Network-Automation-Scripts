@@ -1,0 +1,12 @@
+# Scripts usually small, but if you have data files or large configs:
+*.json filter=lfs diff=lfs merge=lfs -text
+*.csv filter=lfs diff=lfs merge=lfs -text
+*.yaml filter=lfs diff=lfs merge=lfs -text
+*.yml filter=lfs diff=lfs merge=lfs -text
+
+# Large log files
+*.log filter=lfs diff=lfs merge=lfs -text
+
+# Binary files (if any)
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
