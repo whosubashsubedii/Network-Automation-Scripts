@@ -1,0 +1,16 @@
+# Usually scripts are small text files, so no LFS needed for most
+# But if you include large config files or outputs, track those
+
+# Large docs, archives, or binary configs
+*.log filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.pdf filter=lfs diff=lfs merge=lfs -text
+
+# Optional: if you have binaries or executables
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+
+# Audio/video if any
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.wav filter=lfs diff=lfs merge=lfs -text
