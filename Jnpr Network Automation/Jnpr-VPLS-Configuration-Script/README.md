@@ -1,66 +1,102 @@
 
+````markdown
+# Jnpr-VPLS-Configuration-Script
 
+Automate VPLS configuration on Juniper routers using interactive Python or Bash scripts. This tool helps network engineers quickly generate configuration commands for interfaces, VLANs, and VPLS neighbors.
 
-# VPLS Configuration Script for Juniper Routers
+---
 
-This Python script generates Juniper router configuration commands to set up **VPLS (Virtual Private LAN Service)**, based on user input.
+## 🛠 Features
 
-## 🔧 Features
+- Generate Juniper VPLS configuration commands interactively.
+- Supports multiple neighbor entries for VPLS instances.
+- Works with both Python (`jnpr_vpls.py`) and Bash (`vpls_config.sh`) scripts.
+- Easy-to-use prompts to reduce manual configuration errors.
 
-* Accepts inputs for:
+---
 
-  * VPLS instance name
-  * Bundle interface (e.g., `ae6`)
-  * VLAN ID
-* Optionally configures one or more VPLS neighbors
-* Outputs complete CLI configuration commands for Juniper routers
+## ⚙️ Prerequisites
 
-## 🧪 Example Usage
+- Linux or macOS terminal environment
+- Python 3.x (for `jnpr_vpls.py`)
+- Bash shell (for `vpls_config.sh`)
+- Access to Juniper routers to apply configuration
 
-```bash
-$ python vpls_config.py
-Enter the name of vpls: CUSTOMER1-VPLS
-Enter the Bundle name Eg:ae6: ae6
-Enter the vlan : 100
-Do you want to configure a neighbor? (yes/no): yes
-Enter neighbor IP: 192.0.2.1
-Add another neighbour? (yes/no)): yes
-Enter neighbor IP: 192.0.2.2
-Add another neighbour? (yes/no)): no
-```
+---
 
-### 🖥️ Sample Output
+## 💾 Setup
+
+1. Clone the repository:
 
 ```bash
-### The Command to configure VPLS in JUNIPER ROUTER ####
+git clone https://github.com/whosubashsubedii/Network-Automation-Scripts.git
+cd Network-Automation-Scripts/Jnpr\ Network\ Automation/Jnpr-VPLS-Configuration-Script
+````
 
-set interfaces ae6 unit 100 description CUSTOMER1-VPLS
-set interfaces ae6 unit 100 encapsulation vlan-vpls
-set interfaces ae6 unit 100 vlan-id 100
-set interfaces ae6 unit 100 family vpls
-set routing-instances CUSTOMER1-VPLS interface ae6.100
-set routing-instances CUSTOMER1-VPLS protocols vpls vpls-id 100
-set routing-instances CUSTOMER1-VPLS description CUSTOMER1-VPLS
-set routing-instances CUSTOMER1-VPLS instance-type vpls
-set routing-instances CUSTOMER1-VPLS protocols vpls no-tunnel-services
-set routing-instances CUSTOMER1-VPLS protocols vpls vpls-id 100
-set routing-instances CUSTOMER1-VPLS protocols vpls neighbor 192.0.2.1 pseudowire-status-tlv
-set routing-instances CUSTOMER1-VPLS protocols vpls neighbor 192.0.2.2 pseudowire-status-tlv
-```
+2. Choose your preferred script:
 
-## 💾 File Structure
+* **Python:** `jnpr_vpls.py`
+* **Bash:** `vpls_config.sh`
 
-```
-vpls_config.py       # Main Python script
-README.md            # Documentation file
-```
-
-## 📋 Requirements
-
-* Python 3.x
-
-## 🚀 How to Run
+3. Make Bash script executable (if using `vpls_config.sh`):
 
 ```bash
-python vpls_config.py
+chmod +x vpls_config.sh
 ```
+
+---
+
+## 🚀 Usage
+
+### Python Script
+
+Run the Python script:
+
+```bash
+python3 jnpr_vpls.py
+```
+
+* Enter the VPLS name, bundle (e.g., `ae6`), VLAN.
+* Optionally, add neighbors (multiple entries supported).
+* The script prints all commands needed for Juniper VPLS configuration.
+
+### Bash Script
+
+Run the Bash script:
+
+```bash
+./vpls_config.sh
+```
+
+* Follow interactive prompts for VPLS name, bundle, VLAN, and neighbors.
+* The script outputs the full set of configuration commands.
+* Press Enter to exit after reviewing the output.
+
+---
+
+## 📂 File Structure
+
+```
+.
+├── jnpr_vpls.py        # Python VPLS configuration script
+├── vpls_config.sh       # Bash VPLS configuration script
+└── README.md            # Project documentation
+```
+
+---
+
+## ⚠️ Notes
+
+* Scripts only **generate configuration commands**. You still need to copy/apply them on the actual Juniper devices.
+* Python script requires Python 3.x installed.
+* Bash script requires a Bash shell environment.
+
+---
+
+## 👤 Author
+
+Made by **SUBASH SUBEDI**
+GitHub: [whosubashsubedii](https://github.com/whosubashsubedii)
+
+```
+

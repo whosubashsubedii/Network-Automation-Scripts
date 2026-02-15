@@ -45,12 +45,11 @@ cd "Network-Automation-Scripts"
 
 ### 2. Navigate to the vendor-specific folder
 
-| Vendor   | Folder                      | Description                                                     |
-| -------- | --------------------------- | --------------------------------------------------------------- |
-| Juniper  | Jnpr Network Automation     | Juniper network automation scripts (TBD)
-|
-| Cisco    | Csco Network Automation     | Cisco network automation scripts (TBD)                          |
-| MikroTik | MikroTik Network Automation | MikroTik automation scripts (TBD)                               |
+| Vendor   | Folder                      | Description                               |
+| -------- | --------------------------- | ----------------------------------------- |
+| Juniper  | Jnpr Network Automation     | Juniper network automation scripts        |
+| Cisco    | Csco Network Automation     | Cisco network automation scripts (TBD)    |
+| MikroTik | MikroTik Network Automation | MikroTik network automation scripts (TBD) |
 
 ### 3. Follow individual README.md files
 
