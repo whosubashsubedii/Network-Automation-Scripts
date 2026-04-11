@@ -1,0 +1,654 @@
+###############################################
+# MikroTik RouterOS v7.x Interactive Deployment Script
+# Combines: VLAN-per-port security model + defconf automation
+# Author: Generated for RouterOS v7.x (tested on v7.21+)
+#
+# USAGE:
+#   Paste into Terminal or run via /system script
+#   Script will prompt for all configuration inputs
+#   and build the full router configuration dynamically.
+###############################################
+
+:log info "=== Interactive Deployment Script Starting ===";
+
+#===============================================================================
+# SECTION 0: WAIT FOR INTERFACES (defconf style)
+#===============================================================================
+:local count 0;
+:while ([/interface ethernet find] = "") do={
+  :if ($count = 30) do={
+    :log warning "Deploy: Unable to find ethernet interfaces after 30s. Aborting.";
+    /quit;
+  };
+  :log info ("Deploy: Waiting for interfaces... " . $count . "s");
+  :delay 1s;
+  :set count ($count + 1);
+};
+:log info "Deploy: Interfaces found. Proceeding.";
+
+#===============================================================================
+# SECTION 1: COLLECT USER INPUTS
+#===============================================================================
+
+:put "";
+:put "##############################################################";
+:put "#     MikroTik Interactive Provisioning Script (v7.x)       #";
+:put "#     VLAN-per-port + Security + Dynamic DHCP               #";
+:put "##############################################################";
+:put "";
+
+# --- System Identity ---
+:put "--- SYSTEM IDENTITY ---";
+:local routerName;
+:put "Enter router identity name (e.g. OFFICE-RB4011): ";
+:set routerName [:terminal inkey timeout=300];
+:set routerName [/terminal input prompt="Router name: "];
+:if ($routerName = "" || $routerName = nil) do={ :set routerName "MikroTik-Router" };
+
+# --- Timezone ---
+:put "";
+:put "--- TIMEZONE ---";
+:local timezone [/terminal input prompt="Timezone (default: Asia/Kathmandu): "];
+:if ($timezone = "" || $timezone = nil) do={ :set timezone "Asia/Kathmandu" };
+
+# --- WAN Interface ---
+:put "";
+:put "--- WAN INTERFACE ---";
+:put "Available interfaces:";
+:foreach i in=[/interface ethernet find] do={ :put ("  " . [/interface ethernet get $i name]) };
+:local wanIface [/terminal input prompt="WAN interface name (e.g. ether1): "];
+:if ($wanIface = "" || $wanIface = nil) do={ :set wanIface "ether1" };
+
+:local wanComment [/terminal input prompt="Add comment to WAN interface? (leave blank to skip): "];
+:if ($wanComment = "" || $wanComment = nil) do={ :set wanComment ("WAN uplink on " . $wanIface) };
+
+# --- Bridge / Trunk uplink (optional) ---
+:put "";
+:put "--- TRUNK / UPLINK PORT (OPTIONAL) ---";
+:local trunkIface [/terminal input prompt="Trunk/uplink interface for tagged VLANs (leave blank if none): "];
+:local hasTrunk 0;
+:if ($trunkIface != "" && $trunkIface != nil) do={ :set hasTrunk 1 };
+
+:local bridgeComment [/terminal input prompt="Add comment to br-lan bridge? (leave blank for default): "];
+:if ($bridgeComment = "" || $bridgeComment = nil) do={ :set bridgeComment "LAN bridge with VLAN filtering" };
+
+# --- VLAN Configuration ---
+:put "";
+:put "--- VLAN CONFIGURATION ---";
+:local startVlanId [/terminal input prompt="Starting VLAN ID (e.g. 92): "];
+:if ($startVlanId = "" || $startVlanId = nil) do={ :set startVlanId 92 };
+:set startVlanId [:tonum $startVlanId];
+
+:local numVlans [/terminal input prompt="Number of VLANs to create (1-9, one per LAN port): "];
+:if ($numVlans = "" || $numVlans = nil) do={ :set numVlans 9 };
+:set numVlans [:tonum $numVlans];
+:if ($numVlans < 1) do={ :set numVlans 1 };
+:if ($numVlans > 9) do={ :set numVlans 9 };
+
+:local baseOctet [/terminal input prompt="Base IP second octet (e.g. 20 gives 10.20.0.0/24 for first VLAN): "];
+:if ($baseOctet = "" || $baseOctet = nil) do={ :set baseOctet 20 };
+:set baseOctet [:tonum $baseOctet];
+
+:local mgmtVlanId [/terminal input prompt=("Which VLAN is MANAGEMENT VLAN? (enter VLAN ID, default: " . $startVlanId . "): ")];
+:if ($mgmtVlanId = "" || $mgmtVlanId = nil) do={ :set mgmtVlanId $startVlanId };
+:set mgmtVlanId [:tonum $mgmtVlanId];
+
+# --- DNS Servers ---
+:put "";
+:put "--- DNS CONFIGURATION ---";
+:local dnsServers [/terminal input prompt="Upstream DNS servers (default: 1.1.1.1,8.8.8.8): "];
+:if ($dnsServers = "" || $dnsServers = nil) do={ :set dnsServers "1.1.1.1,8.8.8.8" };
+
+# --- Summary before applying ---
+:put "";
+:put "##############################################################";
+:put "#                  CONFIGURATION SUMMARY                    #";
+:put "##############################################################";
+:put ("  Router Name   : " . $routerName);
+:put ("  Timezone      : " . $timezone);
+:put ("  WAN Interface : " . $wanIface . " (" . $wanComment . ")");
+:put ("  Bridge Comment: " . $bridgeComment);
+:if ($hasTrunk = 1) do={ :put ("  Trunk Port    : " . $trunkIface . " (tagged all VLANs)") };
+:put ("  Start VLAN ID : " . $startVlanId);
+:put ("  VLAN Count    : " . $numVlans . " (on ether2..ether" . ($numVlans + 1) . ")");
+:put ("  Base IP Octet : " . $baseOctet . " -> first VLAN = 10." . $baseOctet . ".0.0/24");
+:put ("  Management VLAN: VLAN" . $mgmtVlanId);
+:put ("  DNS Servers   : " . $dnsServers);
+:put "";
+
+:local confirm [/terminal input prompt="Apply this configuration? (yes/no): "];
+:if ($confirm != "yes") do={
+  :put "Aborted. No changes made.";
+  :log info "Deploy: User aborted before applying config.";
+  /quit;
+};
+
+:put "";
+:put "Applying configuration...";
+:log info "Deploy: User confirmed. Applying configuration.";
+
+#===============================================================================
+# SECTION 2: SYSTEM IDENTITY + CLOCK + NTP
+#===============================================================================
+:log info "Deploy: Configuring system identity and time...";
+
+/system identity set name=$routerName;
+/system clock set time-zone-name=$timezone;
+/system ntp client set enabled=yes;
+/system ntp client servers add address=pool.ntp.org;
+
+:put "  [OK] System identity and NTP configured.";
+
+#===============================================================================
+# SECTION 3: INTERFACE LISTS
+#===============================================================================
+:log info "Deploy: Creating interface lists...";
+
+/interface list add name=WAN comment="WAN uplinks";
+/interface list add name=LAN comment="All internal VLAN L3 interfaces";
+/interface list add name=MGMT comment="Management VLAN interface";
+
+/interface list member add list=WAN interface=$wanIface comment=$wanComment;
+
+:put "  [OK] Interface lists created.";
+
+#===============================================================================
+# SECTION 4: BRIDGE CREATION
+#===============================================================================
+:log info "Deploy: Creating LAN bridge...";
+
+/interface bridge add \
+  name=br-lan \
+  protocol-mode=rstp \
+  vlan-filtering=no \
+  auto-mac=yes \
+  comment=$bridgeComment;
+
+:put "  [OK] Bridge br-lan created (vlan-filtering disabled until table is ready).";
+
+#===============================================================================
+# SECTION 5: BRIDGE PORTS (DYNAMIC - ACCESS PORTS PER VLAN)
+#===============================================================================
+:log info "Deploy: Adding access ports to bridge...";
+
+:local vlanIdx 0;
+:while ($vlanIdx < $numVlans) do={
+  :local portNum ($vlanIdx + 2);
+  :local ethName ("ether" . $portNum);
+  :local thisVlanId ($startVlanId + $vlanIdx);
+  :local thisOctet ($baseOctet + ($vlanIdx * 10));
+  :local networkBase ("10." . $thisOctet . ".0");
+
+  /interface bridge port add \
+    bridge=br-lan \
+    interface=$ethName \
+    pvid=$thisVlanId \
+    frame-types=admit-only-untagged-and-priority-tagged \
+    comment=("Access: VLAN" . $thisVlanId . " -> " . $networkBase . ".0/24");
+
+  :set vlanIdx ($vlanIdx + 1);
+};
+
+# Add trunk port if specified (tagged, all VLANs)
+:if ($hasTrunk = 1) do={
+  /interface bridge port add \
+    bridge=br-lan \
+    interface=$trunkIface \
+    frame-types=admit-only-vlan-tagged \
+    comment=("Trunk/uplink: tagged all VLANs");
+};
+
+:put "  [OK] Bridge access ports configured.";
+
+#===============================================================================
+# SECTION 6: BRIDGE VLAN TABLE
+#===============================================================================
+:log info "Deploy: Building bridge VLAN table...";
+
+:local vlanIdx 0;
+:while ($vlanIdx < $numVlans) do={
+  :local portNum ($vlanIdx + 2);
+  :local ethName ("ether" . $portNum);
+  :local thisVlanId ($startVlanId + $vlanIdx);
+
+  :if ($hasTrunk = 1) do={
+    /interface bridge vlan add \
+      bridge=br-lan \
+      vlan-ids=$thisVlanId \
+      tagged=(br-lan . "," . $trunkIface) \
+      untagged=$ethName \
+      comment=("VLAN" . $thisVlanId . " untagged on " . $ethName . ", tagged on trunk");
+  } else={
+    /interface bridge vlan add \
+      bridge=br-lan \
+      vlan-ids=$thisVlanId \
+      tagged=br-lan \
+      untagged=$ethName \
+      comment=("VLAN" . $thisVlanId . " untagged on " . $ethName);
+  };
+
+  :set vlanIdx ($vlanIdx + 1);
+};
+
+:put "  [OK] Bridge VLAN table populated.";
+
+#===============================================================================
+# SECTION 7: L3 VLAN INTERFACES
+#===============================================================================
+:log info "Deploy: Creating L3 VLAN interfaces...";
+
+:local mgmtIfaceName "";
+
+:local vlanIdx 0;
+:while ($vlanIdx < $numVlans) do={
+  :local portNum ($vlanIdx + 2);
+  :local thisVlanId ($startVlanId + $vlanIdx);
+  :local vlanIfName ("V" . $thisVlanId . "-ETH-" . $portNum);
+
+  /interface vlan add \
+    name=$vlanIfName \
+    interface=br-lan \
+    vlan-id=$thisVlanId \
+    comment=("L3 VLAN" . $thisVlanId . " gateway interface");
+
+  /interface list member add list=LAN interface=$vlanIfName;
+
+  :if ($thisVlanId = $mgmtVlanId) do={
+    :set mgmtIfaceName $vlanIfName;
+    /interface list member add list=MGMT interface=$vlanIfName;
+  };
+
+  :set vlanIdx ($vlanIdx + 1);
+};
+
+:put "  [OK] L3 VLAN interfaces created.";
+:put ("  [INFO] Management VLAN interface: " . $mgmtIfaceName);
+
+#===============================================================================
+# SECTION 8: LOOPBACK + IP ADDRESSES
+#===============================================================================
+:log info "Deploy: Assigning IP addresses...";
+
+/interface loopback add name=loopback comment="Router loopback";
+/ip address add address=10.255.255.1/32 interface=loopback comment="Loopback /32 (stable router ID)";
+
+:local mgmtSubnet "";
+
+:local vlanIdx 0;
+:while ($vlanIdx < $numVlans) do={
+  :local portNum ($vlanIdx + 2);
+  :local thisVlanId ($startVlanId + $vlanIdx);
+  :local thisOctet ($baseOctet + ($vlanIdx * 10));
+  :local vlanIfName ("V" . $thisVlanId . "-ETH-" . $portNum);
+  :local gwAddress ("10." . $thisOctet . ".0.1/24");
+
+  :local addrComment ("GW VLAN" . $thisVlanId);
+  :if ($thisVlanId = $mgmtVlanId) do={
+    :set addrComment ($addrComment . " (MANAGEMENT)");
+    :set mgmtSubnet ("10." . $thisOctet . ".0.0/24");
+  };
+
+  /ip address add \
+    address=$gwAddress \
+    interface=$vlanIfName \
+    comment=$addrComment;
+
+  :set vlanIdx ($vlanIdx + 1);
+};
+
+:put "  [OK] IP addresses assigned.";
+
+#===============================================================================
+# SECTION 9: WAN DHCP CLIENT
+#===============================================================================
+:log info "Deploy: Configuring WAN DHCP client...";
+
+/ip dhcp-client add \
+  interface=$wanIface \
+  add-default-route=yes \
+  use-peer-dns=no \
+  use-peer-ntp=no \
+  disabled=no \
+  comment=("WAN via DHCP on " . $wanIface);
+
+:put "  [OK] WAN DHCP client configured on " . $wanIface;
+
+#===============================================================================
+# SECTION 10: DNS CACHE
+#===============================================================================
+:log info "Deploy: Configuring DNS...";
+
+/ip dns set \
+  servers=$dnsServers \
+  allow-remote-requests=yes \
+  cache-size=4096KiB;
+
+/ip dns static add \
+  name=router.lan \
+  address=10.255.255.1 \
+  comment="Router hostname";
+
+:put "  [OK] DNS configured with servers: " . $dnsServers;
+
+#===============================================================================
+# SECTION 11: DHCP POOLS + SERVERS + NETWORKS
+#===============================================================================
+:log info "Deploy: Creating DHCP pools and servers...";
+
+:local vlanIdx 0;
+:while ($vlanIdx < $numVlans) do={
+  :local portNum ($vlanIdx + 2);
+  :local thisVlanId ($startVlanId + $vlanIdx);
+  :local thisOctet ($baseOctet + ($vlanIdx * 10));
+  :local vlanIfName ("V" . $thisVlanId . "-ETH-" . $portNum);
+  :local poolName ("DHCP_POOL_V" . $thisVlanId);
+  :local serverName ("DHCP_V" . $thisVlanId);
+  :local poolRanges ("10." . $thisOctet . ".0.10-10." . $thisOctet . ".0.254");
+  :local networkAddr ("10." . $thisOctet . ".0.0/24");
+  :local gwAddr ("10." . $thisOctet . ".0.1");
+
+  /ip pool add \
+    name=$poolName \
+    ranges=$poolRanges \
+    comment=("VLAN" . $thisVlanId . " address pool");
+
+  /ip dhcp-server add \
+    name=$serverName \
+    interface=$vlanIfName \
+    address-pool=$poolName \
+    lease-time=30m \
+    authoritative=after-2sec-delay \
+    disabled=no \
+    comment=("DHCP server for VLAN" . $thisVlanId);
+
+  /ip dhcp-server network add \
+    address=$networkAddr \
+    gateway=$gwAddr \
+    dns-server=$gwAddr \
+    comment=("VLAN" . $thisVlanId . " DHCP network options");
+
+  :set vlanIdx ($vlanIdx + 1);
+};
+
+:put "  [OK] DHCP pools, servers, and networks created.";
+
+#===============================================================================
+# SECTION 12: NAT
+#===============================================================================
+:log info "Deploy: Configuring NAT...";
+
+/ip firewall nat add \
+  chain=srcnat \
+  out-interface-list=WAN \
+  action=masquerade \
+  comment="NAT: masquerade all LAN VLANs to WAN";
+
+:put "  [OK] NAT masquerade rule added.";
+
+#===============================================================================
+# SECTION 13: FIREWALL ADDRESS LISTS
+#===============================================================================
+:log info "Deploy: Building firewall address lists...";
+
+/ip firewall address-list add \
+  list=MGMT_ALLOWED \
+  address=$mgmtSubnet \
+  comment=("Management access: VLAN" . $mgmtVlanId . " only");
+
+:put "  [OK] Management address list: " . $mgmtSubnet;
+
+#===============================================================================
+# SECTION 14: FIREWALL FILTER RULES
+#===============================================================================
+:log info "Deploy: Applying firewall rules...";
+
+# ---- INPUT CHAIN ----
+
+# Established / related (always first)
+/ip firewall filter add \
+  chain=input action=accept \
+  connection-state=established,related,untracked \
+  comment="INPUT: accept established, related, untracked";
+
+# Drop invalid
+/ip firewall filter add \
+  chain=input action=drop \
+  connection-state=invalid \
+  comment="INPUT: drop invalid connections";
+
+# ICMP
+/ip firewall filter add \
+  chain=input action=accept \
+  protocol=icmp \
+  comment="INPUT: accept ICMP (ping/traceroute)";
+
+# Loopback
+/ip firewall filter add \
+  chain=input action=accept \
+  src-address=127.0.0.1 dst-address=127.0.0.1 \
+  in-interface=lo \
+  comment="INPUT: accept loopback (for CAPsMAN etc)";
+
+# DHCP from LAN VLANs
+/ip firewall filter add \
+  chain=input action=accept \
+  in-interface-list=LAN \
+  protocol=udp dst-port=67,68 \
+  comment="INPUT: accept DHCP from VLAN clients";
+
+# DNS from LAN (UDP + TCP)
+/ip firewall filter add \
+  chain=input action=accept \
+  in-interface-list=LAN \
+  protocol=udp dst-port=53 \
+  comment="INPUT: accept DNS UDP from LAN";
+
+/ip firewall filter add \
+  chain=input action=accept \
+  in-interface-list=LAN \
+  protocol=tcp dst-port=53 \
+  comment="INPUT: accept DNS TCP from LAN";
+
+# SSH brute-force blocklist population (non-MGMT sources first)
+/ip firewall filter add \
+  chain=input action=add-src-to-address-list \
+  address-list=SSH_BRUTE address-list-timeout=1d \
+  protocol=tcp dst-port=22 \
+  connection-state=new \
+  src-address-list=!MGMT_ALLOWED \
+  comment="INPUT: tag non-MGMT SSH attempts for blocklist";
+
+/ip firewall filter add \
+  chain=input action=drop \
+  src-address-list=SSH_BRUTE \
+  comment="INPUT: drop SSH brute-force sources";
+
+# Management services - MGMT VLAN only
+/ip firewall filter add \
+  chain=input action=accept \
+  src-address-list=MGMT_ALLOWED \
+  protocol=tcp dst-port=22 \
+  comment="INPUT: allow SSH from MGMT VLAN only";
+
+/ip firewall filter add \
+  chain=input action=accept \
+  src-address-list=MGMT_ALLOWED \
+  protocol=tcp dst-port=8291 \
+  comment="INPUT: allow Winbox from MGMT VLAN only";
+
+/ip firewall filter add \
+  chain=input action=accept \
+  src-address-list=MGMT_ALLOWED \
+  protocol=tcp dst-port=80,443 \
+  comment="INPUT: allow HTTP/HTTPS mgmt from MGMT VLAN (disable after hardening)";
+
+# Default deny input
+/ip firewall filter add \
+  chain=input action=drop \
+  comment="INPUT: default deny all other input";
+
+# ---- FORWARD CHAIN ----
+
+# Established / related
+/ip firewall filter add \
+  chain=forward action=accept \
+  connection-state=established,related,untracked \
+  comment="FWD: accept established, related, untracked";
+
+# Drop invalid
+/ip firewall filter add \
+  chain=forward action=drop \
+  connection-state=invalid \
+  comment="FWD: drop invalid";
+
+# FastTrack for performance
+/ip firewall filter add \
+  chain=forward action=fasttrack-connection \
+  connection-state=established,related \
+  hw-offload=yes \
+  comment="FWD: FastTrack established/related (hw-offload if supported)";
+
+# Block inter-VLAN (strict segmentation - LAN->LAN denied by default)
+/ip firewall filter add \
+  chain=forward action=drop \
+  in-interface-list=LAN \
+  out-interface-list=LAN \
+  comment="FWD: block inter-VLAN traffic (strict segmentation)";
+
+# Allow VLAN -> WAN (internet)
+/ip firewall filter add \
+  chain=forward action=accept \
+  in-interface-list=LAN \
+  out-interface-list=WAN \
+  comment="FWD: allow VLAN clients -> WAN (internet)";
+
+# Drop unsolicited WAN -> LAN
+/ip firewall filter add \
+  chain=forward action=drop \
+  in-interface-list=WAN \
+  comment="FWD: drop unsolicited WAN -> LAN (no dstnat)";
+
+:put "  [OK] Firewall INPUT and FORWARD rules applied.";
+
+#===============================================================================
+# SECTION 15: IPV6 FIREWALL (defconf-based baseline)
+#===============================================================================
+:log info "Deploy: Applying IPv6 firewall baseline...";
+
+/ipv6 firewall address-list add list=bad_ipv6 address=::/128       comment="bad_ipv6: unspecified";
+/ipv6 firewall address-list add list=bad_ipv6 address=::1          comment="bad_ipv6: loopback";
+/ipv6 firewall address-list add list=bad_ipv6 address=fec0::/10    comment="bad_ipv6: site-local";
+/ipv6 firewall address-list add list=bad_ipv6 address=::ffff:0:0/96 comment="bad_ipv6: ipv4-mapped";
+/ipv6 firewall address-list add list=bad_ipv6 address=::/96        comment="bad_ipv6: ipv4-compat";
+/ipv6 firewall address-list add list=bad_ipv6 address=100::/64     comment="bad_ipv6: discard";
+/ipv6 firewall address-list add list=bad_ipv6 address=2001:db8::/32 comment="bad_ipv6: documentation";
+/ipv6 firewall address-list add list=bad_ipv6 address=2001:10::/28 comment="bad_ipv6: ORCHID";
+/ipv6 firewall address-list add list=bad_ipv6 address=3ffe::/16    comment="bad_ipv6: 6bone";
+
+/ipv6 firewall filter add chain=input  action=accept connection-state=established,related,untracked comment="IPv6 INPUT: accept established";
+/ipv6 firewall filter add chain=input  action=drop   connection-state=invalid   comment="IPv6 INPUT: drop invalid";
+/ipv6 firewall filter add chain=input  action=accept protocol=icmpv6            comment="IPv6 INPUT: accept ICMPv6";
+/ipv6 firewall filter add chain=input  action=accept protocol=udp dst-port=33434-33534 comment="IPv6 INPUT: accept UDP traceroute";
+/ipv6 firewall filter add chain=input  action=accept protocol=udp dst-port=546 src-address=fe80::/10 comment="IPv6 INPUT: DHCPv6 prefix delegation";
+/ipv6 firewall filter add chain=input  action=drop   in-interface-list=!LAN     comment="IPv6 INPUT: drop not from LAN";
+/ipv6 firewall filter add chain=forward action=fasttrack-connection connection-state=established,related comment="IPv6 FWD: fasttrack";
+/ipv6 firewall filter add chain=forward action=accept connection-state=established,related,untracked comment="IPv6 FWD: accept established";
+/ipv6 firewall filter add chain=forward action=drop   connection-state=invalid  comment="IPv6 FWD: drop invalid";
+/ipv6 firewall filter add chain=forward action=drop   src-address-list=bad_ipv6 comment="IPv6 FWD: drop bad src";
+/ipv6 firewall filter add chain=forward action=drop   dst-address-list=bad_ipv6 comment="IPv6 FWD: drop bad dst";
+/ipv6 firewall filter add chain=forward action=drop   protocol=icmpv6 hop-limit=equal:1 comment="IPv6 FWD: rfc4890 drop hop-limit=1";
+/ipv6 firewall filter add chain=forward action=accept protocol=icmpv6           comment="IPv6 FWD: accept ICMPv6";
+/ipv6 firewall filter add chain=forward action=drop   in-interface-list=!LAN    comment="IPv6 FWD: drop not from LAN";
+
+:put "  [OK] IPv6 firewall baseline applied.";
+
+#===============================================================================
+# SECTION 16: SERVICE HARDENING
+#===============================================================================
+:log info "Deploy: Hardening IP services...";
+
+/ip service set telnet  disabled=yes;
+/ip service set ftp     disabled=yes;
+/ip service set www     disabled=yes;
+/ip service set www-ssl disabled=yes;
+/ip service set api     disabled=yes;
+/ip service set api-ssl disabled=yes;
+
+# Restrict Winbox and SSH to management subnet only
+/ip service set winbox address=$mgmtSubnet;
+/ip service set ssh    address=$mgmtSubnet;
+
+:put "  [OK] Services hardened: telnet/ftp/www/api disabled.";
+:put ("  [OK] SSH and Winbox restricted to: " . $mgmtSubnet);
+
+#===============================================================================
+# SECTION 17: MAC SERVER + NEIGHBOR DISCOVERY
+#===============================================================================
+:log info "Deploy: Restricting MAC server and neighbor discovery...";
+
+/tool mac-server set allowed-interface-list=LAN;
+/tool mac-server mac-winbox set allowed-interface-list=LAN;
+/ip neighbor discovery-settings set discover-interface-list=LAN;
+
+:put "  [OK] MAC server and neighbor discovery restricted to LAN.";
+
+#===============================================================================
+# SECTION 18: LOGGING
+#===============================================================================
+:log info "Deploy: Configuring basic logging...";
+
+/system logging add topics=firewall action=memory comment="Firewall events (short-term memory buffer)";
+
+:put "  [OK] Firewall logging to memory enabled.";
+
+#===============================================================================
+# SECTION 19: ENABLE VLAN FILTERING (MUST BE LAST)
+#===============================================================================
+:log info "Deploy: Enabling VLAN filtering on bridge (final step)...";
+
+# Brief delay to ensure all VLAN table entries are committed
+:delay 1s;
+
+/interface bridge set br-lan vlan-filtering=yes;
+
+:put "  [OK] VLAN filtering ENABLED on br-lan.";
+
+#===============================================================================
+# SECTION 20: COMPLETION SUMMARY
+#===============================================================================
+:put "";
+:put "##############################################################";
+:put "#          PROVISIONING COMPLETE                            #";
+:put "##############################################################";
+:put ("  Router          : " . $routerName);
+:put ("  Timezone        : " . $timezone);
+:put ("  WAN             : " . $wanIface);
+:put ("  Management VLAN : VLAN" . $mgmtVlanId . " (" . $mgmtSubnet . ")");
+:put ("  VLANs Created   : " . $numVlans . " (VLAN" . $startVlanId . " to VLAN" . ($startVlanId + $numVlans - 1) . ")");
+:put ("  DHCP Servers    : " . $numVlans . " (one per VLAN)");
+:put ("  DNS Servers     : " . $dnsServers);
+:put "";
+:put "  SECURITY POSTURE:";
+:put "    - Inter-VLAN traffic: BLOCKED by default";
+:put "    - Management access: MGMT VLAN only";
+:put "    - SSH/Winbox: restricted to MGMT subnet";
+:put "    - Telnet/FTP/API/HTTP: DISABLED";
+:put "    - SSH brute-force: auto-blocklist enabled";
+:put "    - WAN unsolicited input: DROPPED";
+:put "";
+:put "  NEXT STEPS:";
+:put "    1. Change admin password:  /user set admin password=STRONGPASSWORD";
+:put "    2. Verify VLAN access from each port";
+:put "    3. Test internet from each VLAN";
+:put "    4. Disable HTTP/HTTPS mgmt rule when done with WebFig";
+:put "    5. Review /ip firewall filter print for rule order";
+:put "    6. Update packages: /system package update";
+:put "";
+:put "  Script finished at: " . [/system clock get time] . " " . [/system clock get date];
+:log info "=== Interactive Deployment Script Finished ===";
+
+###############################################
+# END OF SCRIPT
+###############################################
+
+
